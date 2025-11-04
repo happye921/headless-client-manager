@@ -1,0 +1,225 @@
+﻿@page "/headless-clients"
+@rendermode InteractiveServer
+@using System.Diagnostics
+@implements IDisposable
+@inject IJSRuntime JS
+
+<PageTitle>Headless Client Manager</PageTitle>
+
+<h1>Headless Client Manager</h1>
+
+@if (headlessClients is null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    @for (int i = 0; i < headlessClients.Length; i++)
+    {
+        var index = i;
+        <!-- capture index safely -->
+        <div class="card mb-3 shadow-sm w-50">
+            <div class="card-body" >
+                <h5 class="card-title" style="font-weight: bold">@headlessClients[index].Username</h5>
+                <p><strong>Status:</strong> @ToTextStatus(headlessClients[index].Status)</p>
+
+                @if (headlessClients[index].Status == HeadlessStatus.Stopped)
+                {
+                    <button class="btn btn-success" @onclick="() => ConfirmStart(index)">Start</button>
+                }
+                @if (headlessClients[index].Status == HeadlessStatus.Running)
+                {
+                    <button class="btn btn-warning" @onclick="() => ConfirmRestart(index)">Restart</button>
+                }
+            </div>
+        </div>
+    }
+}
+
+@code {
+
+
+
+    const string processName = "FikaHeadlessManager";
+    const string processNameExe = processName + ".exe";
+
+    private HeadlessClient[] headlessClients = default!;
+
+    [Inject]
+    IConfiguration Configuration { get; set; } = default!;
+
+    private PeriodicTimer refreshTimer = new(TimeSpan.FromSeconds(3));
+
+    private CancellationTokenSource refreshTimerToken = new CancellationTokenSource();
+
+    protected override async Task OnInitializedAsync()
+    {
+        headlessClients = Configuration.GetSection("HeadlessClients").Get<List<HeadlessClient>>()!.ToArray();
+        GetHeadlessStatus();
+        _ = RunTimerAsync();
+        await Task.CompletedTask;
+    }
+
+    private void GetHeadlessStatus()
+    {
+        foreach (var client in headlessClients)
+        {
+            client.Status = HeadlessStatus.Stopped;
+
+            var processes = Process.GetProcessesByName(processName);
+            foreach (var process in processes)
+            {
+                try
+                {
+                    string processPath = process.MainModule?.FileName ?? "";
+                    string headlessFullPath = Path.Combine(client.Path, processNameExe);
+                    if (string.Equals(processPath, headlessFullPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        client.Status = HeadlessStatus.Running;
+                        break;
+                    }
+                }
+                catch
+                {
+                    continue;
+                }
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task ConfirmStart(int index)
+    {
+        bool confirmed = await JS.InvokeAsync<bool>("confirm", $"Are you sure you want to START {headlessClients[index].Username}?");
+        if (confirmed)
+        {
+            await StartHeadlessClientAsync(index);
+        }
+    }
+
+    private async Task ConfirmRestart(int index)
+    {
+        bool confirmed = await JS.InvokeAsync<bool>("confirm", $"Are you sure you want to RESTART {headlessClients[index].Username}?");
+        if (confirmed)
+        {
+            await RestartHeadlessClientAsync(index);
+        }
+    }
+
+    private async Task StartHeadlessClientAsync(int index)
+    {
+        var client = headlessClients[index];
+
+        client.Status = HeadlessStatus.Starting;
+
+        refreshTimerToken.Cancel();
+
+        StateHasChanged();
+
+        await Task.Run(() =>
+        {
+            string startPath = Path.Combine(client.Path, processNameExe);
+
+            if (File.Exists(startPath))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = startPath,
+                    UseShellExecute = false,
+                    WorkingDirectory = Path.GetDirectoryName(startPath),
+                    WindowStyle = ProcessWindowStyle.Normal,
+                    CreateNoWindow = false,
+                });
+            }
+        });
+
+        await Task.Delay(7000);
+
+        refreshTimerToken = new CancellationTokenSource();
+        _ = RunTimerAsync();
+    }
+
+    private async Task RestartHeadlessClientAsync(int index)
+    {
+        var client = headlessClients[index];
+
+        client.Status = HeadlessStatus.Loading;
+
+        refreshTimerToken.Cancel();
+
+        StateHasChanged();
+
+        await Task.Run(() =>
+        {
+            string killPath = Path.Combine(client.Path, processNameExe);
+
+            foreach (var process in Process.GetProcessesByName(processName))
+            {
+                try
+                {
+                    if (string.Equals(process.MainModule?.FileName, killPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        process.Kill(true);
+                        process.WaitForExit(5000);
+                        break;
+                    }
+                }
+                catch { }
+            }
+
+            if (File.Exists(killPath))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = killPath,
+                    UseShellExecute = false,
+                    WorkingDirectory = Path.GetDirectoryName(killPath),
+                    WindowStyle = ProcessWindowStyle.Normal,
+                    CreateNoWindow = false,
+                });
+            }
+        });
+
+
+
+        await Task.Delay(7000);
+
+        refreshTimerToken = new CancellationTokenSource();
+        _ = RunTimerAsync();
+    }
+
+    private async Task RunTimerAsync()
+    {
+        while (await refreshTimer.WaitForNextTickAsync(refreshTimerToken.Token))
+        {
+            GetHeadlessStatus();
+        }
+    }
+
+    public class HeadlessClient
+    {
+        public string Path { get; set; } = default!;
+        public string Username { get; set; } = default!;
+        public HeadlessStatus Status { get; set; } = HeadlessStatus.Stopped;
+    }
+
+    public enum HeadlessStatus
+    {
+        Stopped = 0,
+        Running = 1,
+        Loading = 2,
+        Starting = 3,
+    }
+
+    public string ToTextStatus(HeadlessStatus status) => status switch
+    {
+        HeadlessStatus.Stopped => "❌ Not Running ❌",
+        HeadlessStatus.Running => "🚀 Running 🚀",
+        HeadlessStatus.Loading => "🐢 Restarting 🐢",
+        HeadlessStatus.Starting => "🏎️ Starting 🏎️",
+        _ => ""
+    };
+
+    public void Dispose() => refreshTimer.Dispose();
+}
