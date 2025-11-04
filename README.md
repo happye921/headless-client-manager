@@ -24,6 +24,10 @@ Sure
 > [!WARNING]
 > Yes, but be advised that I made this for personal use and accomodated it to my personal use cases, I'm not responsible for any side effects.
 
+## How can I use this?
+You can either build it with any .NET 9 build tool or download a [Release Package](https://github.com/happye921/headless-client-manager/releases) and host it on whatever platform you like that supports .NET 9 applications.
+If you're on Windows, I recommend using IIS, just keep in mind that **you have to install** the [ASP.NET Core Runtime 9 HOSTING BUNDLE](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-aspnetcore-9.0.10-windows-hosting-bundle-installer).
+
 ## Can I contribute?
 
 Be my guest.
